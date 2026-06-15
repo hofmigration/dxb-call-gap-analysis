@@ -91,7 +91,14 @@ def post(url, payload, tries=5):
         if r.status_code == 429:
             time.sleep(2 * (attempt + 1))
             continue
-        r.raise_for_status()
+        if r.status_code >= 400:
+            # surface HubSpot's actual error message, not a bare status code
+            try:
+                detail = r.json()
+            except Exception:
+                detail = r.text
+            raise SystemExit(f"\nHubSpot {r.status_code} error on {url}\n"
+                             f"Payload: {payload}\nResponse: {detail}\n")
         return r.json()
     r.raise_for_status()
 
@@ -124,8 +131,8 @@ def fetch_contacts():
         payload = {
             "filterGroups": [{
                 "filters": [
-                    {"propertyName": "createdate", "operator": "GTE", "value": to_ms(WINDOW_START)},
-                    {"propertyName": "createdate", "operator": "LT",  "value": to_ms(WINDOW_END)},
+                    {"propertyName": "createdate", "operator": "GTE", "value": str(to_ms(WINDOW_START))},
+                    {"propertyName": "createdate", "operator": "LT",  "value": str(to_ms(WINDOW_END))},
                     {"propertyName": "hubspot_owner_id", "operator": "IN", "values": OWNER_IDS},
                 ]
             }],
@@ -160,47 +167,51 @@ def fetch_contacts():
 #          with their timestamps and associated contact IDs.
 # ----------------------------------------------------------------------------
 def fetch_calls():
+    """Page through calls PER OWNER to stay well under the 10,000-result search
+    ceiling and avoid large IN+date filter combinations that HubSpot can reject."""
     url = f"{BASE}/crm/v3/objects/calls/search"
-    # contact_id -> list of call datetimes
     calls_by_contact = defaultdict(list)
-    after = None
-    while True:
-        payload = {
-            "filterGroups": [{
-                "filters": [
-                    {"propertyName": "hs_timestamp", "operator": "GTE", "value": to_ms(CALL_START)},
-                    {"propertyName": "hs_timestamp", "operator": "LT",  "value": to_ms(CALL_END)},
-                    {"propertyName": "hubspot_owner_id", "operator": "IN", "values": OWNER_IDS},
-                ]
-            }],
-            "properties": ["hs_timestamp", "hubspot_owner_id", "hs_call_disposition"],
-            "limit": 100,
-        }
-        if after:
-            payload["after"] = after
-        data = post(url, payload)
-        ids = [r["id"] for r in data.get("results", [])]
-        ts_map = {r["id"]: r["properties"].get("hs_timestamp") for r in data.get("results", [])}
 
-        # Batch-read call->contact associations
-        if ids:
-            assoc = post(f"{BASE}/crm/v4/associations/calls/contacts/batch/read",
-                         {"inputs": [{"id": i} for i in ids]})
-            for row in assoc.get("results", []):
-                call_id = row["from"]["id"]
-                ts = ts_map.get(call_id)
-                if not ts:
-                    continue
-                when = parse_ts(ts)
-                if when is None:
-                    continue
-                for to in row.get("to", []):
-                    calls_by_contact[to["toObjectId"]].append(when)
+    for oid in OWNER_IDS:
+        after = None
+        while True:
+            payload = {
+                "filterGroups": [{
+                    "filters": [
+                        {"propertyName": "hs_timestamp", "operator": "GTE", "value": str(to_ms(CALL_START))},
+                        {"propertyName": "hs_timestamp", "operator": "LT",  "value": str(to_ms(CALL_END))},
+                        {"propertyName": "hubspot_owner_id", "operator": "EQ", "value": oid},
+                    ]
+                }],
+                "sorts": [{"propertyName": "hs_timestamp", "direction": "ASCENDING"}],
+                "properties": ["hs_timestamp", "hubspot_owner_id"],
+                "limit": 100,
+            }
+            if after:
+                payload["after"] = after
+            data = post(url, payload)
+            results = data.get("results", [])
+            ids = [r["id"] for r in results]
+            ts_map = {r["id"]: r["properties"].get("hs_timestamp") for r in results}
 
-        paging = data.get("paging", {}).get("next", {}).get("after")
-        if not paging:
-            break
-        after = paging
+            if ids:
+                assoc = post(f"{BASE}/crm/v4/associations/calls/contacts/batch/read",
+                             {"inputs": [{"id": i} for i in ids]})
+                for row in assoc.get("results", []):
+                    call_id = row["from"]["id"]
+                    ts = ts_map.get(call_id)
+                    if not ts:
+                        continue
+                    when = parse_ts(ts)
+                    if when is None:
+                        continue
+                    for to in row.get("to", []):
+                        calls_by_contact[to["toObjectId"]].append(when)
+
+            paging = data.get("paging", {}).get("next", {}).get("after")
+            if not paging:
+                break
+            after = paging
     return calls_by_contact
 
 
