@@ -101,6 +101,18 @@ def to_ms(date_str):
               .replace(tzinfo=dt.timezone.utc).timestamp() * 1000)
 
 
+def parse_ts(ts):
+    """Accept either epoch-millis (int/str) or an ISO8601 string like
+    '2026-04-12T17:18:37.382Z'. Returns a tz-aware datetime, or None."""
+    s = str(ts)
+    if s.isdigit():
+        return dt.datetime.fromtimestamp(int(s) / 1000, tz=dt.timezone.utc)
+    try:
+        return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 # ----------------------------------------------------------------------------
 # STEP 1 — Pull all DXB contacts created in the window (the denominator)
 # ----------------------------------------------------------------------------
@@ -179,7 +191,9 @@ def fetch_calls():
                 ts = ts_map.get(call_id)
                 if not ts:
                     continue
-                when = dt.datetime.fromtimestamp(int(ts) / 1000, tz=dt.timezone.utc)
+                when = parse_ts(ts)
+                if when is None:
+                    continue
                 for to in row.get("to", []):
                     calls_by_contact[to["toObjectId"]].append(when)
 
