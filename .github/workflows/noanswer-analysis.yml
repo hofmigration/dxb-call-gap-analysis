@@ -1,0 +1,16 @@
+name: No Answer Call Analysis
+
+on:
+  workflow_dispatch: {}   # run manually from the Actions tab
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: node noanswer-call-analysis.js
+        env:
+          HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
