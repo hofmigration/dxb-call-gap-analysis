@@ -11,6 +11,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - run: npm install xlsx          # for the Excel output
       - run: node noanswer-call-analysis.js
         env:
           HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noanswer-analysis       # download the .xlsx from here after the run
+          path: noanswer-analysis.xlsx
